@@ -1,16 +1,40 @@
-# React + Vite
+# SynapsePair
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+AI 協作平台 — 訂閱 prompt skills、與團隊共同操控 AI Agent。
 
-Currently, two official plugins are available:
+## 功能規劃
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+### 1. Skills Marketplace
+- 瀏覽並訂閱由專家設計的 AI prompt skills
+- 分類篩選（Coding、Writing、Analysis、Design 等）
+- 訂閱制月費模式，每個 skill 各自計費
 
-## React Compiler
+### 2. 多人協作 AI（Multiplayer AI / Chat-Ops）
+- 建立共享聊天室，邀請團隊成員加入
+- 群組內共同下指令控制 AI Agent
+- 每個聊天室可指定使用的 skill
+- 即時同步，所有成員共享 AI 對話 context
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 3. Skill 存鏈上（roadmap）
+- 重要 skill 上鏈存證，確保版本不可竄改
+- 作者署名與授權管理
 
-## Expanding the ESLint configuration
+## Tech Stack
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- React + Vite
+- React Router
+- Framer Motion
+- Lucide React
+
+## 開發
+
+```bash
+npm install
+npm run dev
+```
+
+## Build
+
+```bash
+npm run build
+```
