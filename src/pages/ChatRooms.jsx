@@ -1,58 +1,32 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Plus, Users, Zap, Lock, Globe, MessageCircle, ChevronRight } from 'lucide-react'
+import { Plus, Users, Zap, Lock, Globe, MessageCircle, ChevronRight, Loader, AlertCircle } from 'lucide-react'
+import { useCurrentAccount, useSignAndExecuteTransaction, ConnectModal, useSuiClient } from '@mysten/dapp-kit'
+import { buildCreateRoomTx } from '../lib/sui'
+import { PACKAGE_ID, MODULE_NAME } from '../config'
 
-const ROOMS = [
-  {
-    id: 'eng-frontend',
-    name: 'Frontend Engineering',
-    description: 'Ship UI faster with shared AI assistance — code review, component design, and debugging together.',
-    members: ['Alex', 'Sam', 'Jordan', 'Taylor'],
-    online: 3,
-    skill: 'Code Reviewer Pro',
-    messages: 248,
-    lastActive: '2m ago',
-    type: 'private',
-    color: '#0071e3',
-  },
-  {
-    id: 'content-team',
-    name: 'Content & Copy',
-    description: 'Collaborative writing workspace for blog posts, product copy, and brand messaging.',
-    members: ['Morgan', 'Casey', 'Riley'],
-    online: 2,
-    skill: 'Growth Copywriter',
-    messages: 134,
-    lastActive: '15m ago',
-    type: 'private',
-    color: '#30d158',
-  },
-  {
-    id: 'data-insights',
-    name: 'Data & Analytics',
-    description: 'Shared context for SQL queries, data exploration, and business intelligence together.',
-    members: ['Quinn', 'Avery', 'Blake', 'Drew', 'Sage'],
-    online: 1,
-    skill: 'Data Analyst',
-    messages: 89,
-    lastActive: '1h ago',
-    type: 'public',
-    color: '#ff9f0a',
-  },
-  {
-    id: 'product-research',
-    name: 'Product Research',
-    description: 'Market analysis, user research synthesis, and competitive intelligence for the product team.',
-    members: ['Jamie', 'Parker'],
-    online: 0,
-    skill: 'Market Researcher',
-    messages: 56,
-    lastActive: '3h ago',
-    type: 'private',
-    color: '#bf5af2',
-  },
-]
+const LS_KEY = 'coral_rooms'
+
+function slugToName(slug) {
+  return (slug || '')
+    .replace(/-[a-z0-9]{4,}$/, '')
+    .split('-')
+    .filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
+}
+
+function loadLocalRooms() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]') }
+  catch { return [] }
+}
+
+function saveLocalRoom(room) {
+  const existing = loadLocalRooms()
+  if (existing.find(r => r.id === room.id)) return
+  localStorage.setItem(LS_KEY, JSON.stringify([room, ...existing]))
+}
 
 function AvatarStack({ members, online, max = 3 }) {
   const colors = ['#e8f0fd', '#e3f9ea', '#fff8e6', '#f3ecff', '#fce8e8']
@@ -191,9 +165,116 @@ function RoomCard({ room }) {
 export default function ChatRooms() {
   const [showCreate, setShowCreate] = useState(false)
   const [newRoom, setNewRoom] = useState({ name: '', desc: '' })
+  const [connectOpen, setConnectOpen] = useState(false)
+  const [createError, setCreateError] = useState(null)
+  const [rooms, setRooms] = useState(loadLocalRooms)
+  const [loadingRooms, setLoadingRooms] = useState(false)
+  const navigate = useNavigate()
+  const account = useCurrentAccount()
+  const client = useSuiClient()
+  const { mutate: signAndExecute, isPending: isCreating } = useSignAndExecuteTransaction()
+
+  // Merge on-chain RoomCreated events into the list
+  useEffect(() => {
+    if (!PACKAGE_ID) return
+    setLoadingRooms(true)
+    client
+      .queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::${MODULE_NAME}::RoomCreated` },
+        limit: 50,
+        order: 'descending',
+      })
+      .then(({ data }) => {
+        const onChain = data.map(e => {
+          const f = e.parsedJson
+          const slug = typeof f.slug === 'string' ? f.slug : ''
+          return {
+            id: slug,
+            name: slugToName(slug),
+            slug,
+            description: '',
+            skill: 'AI Assistant',
+            color: '#0071e3',
+            type: 'public',
+            members: [],
+            online: 0,
+            messages: 0,
+            lastActive: 'On-chain',
+          }
+        }).filter(r => r.id)
+        setRooms(prev => {
+          const ids = new Set(prev.map(r => r.id))
+          const merged = [...prev, ...onChain.filter(r => !ids.has(r.id))]
+          return merged
+        })
+      })
+      .catch(err => console.error('Failed to fetch rooms from chain:', err))
+      .finally(() => setLoadingRooms(false))
+  }, [PACKAGE_ID])
+
+  const handleCreateRoom = () => {
+    if (!newRoom.name.trim()) return
+    setCreateError(null)
+
+    const slug = newRoom.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + Date.now().toString(36)
+
+    const roomObj = {
+      id: slug,
+      name: newRoom.name.trim(),
+      slug,
+      description: newRoom.desc.trim(),
+      skill: 'AI Assistant',
+      color: '#0071e3',
+      type: 'public',
+      members: [],
+      online: 0,
+      messages: 0,
+      lastActive: 'Just now',
+    }
+
+    // No wallet — save locally and navigate
+    if (!account) {
+      saveLocalRoom(roomObj)
+      setRooms(prev => [roomObj, ...prev])
+      setShowCreate(false)
+      setNewRoom({ name: '', desc: '' })
+      navigate(`/chat/${slug}`)
+      return
+    }
+
+    // Contract not deployed — save locally and navigate
+    if (!PACKAGE_ID) {
+      saveLocalRoom(roomObj)
+      setRooms(prev => [roomObj, ...prev])
+      setShowCreate(false)
+      setNewRoom({ name: '', desc: '' })
+      navigate(`/chat/${slug}`)
+      return
+    }
+
+    const tx = buildCreateRoomTx(newRoom.name, slug, true)
+    signAndExecute(
+      { transaction: tx },
+      {
+        onSuccess: (result) => {
+          console.info(`Room created: https://suiexplorer.com/txblock/${result.digest}?network=testnet`)
+          saveLocalRoom(roomObj)
+          setRooms(prev => [roomObj, ...prev])
+          setShowCreate(false)
+          setNewRoom({ name: '', desc: '' })
+          navigate(`/chat/${slug}`)
+        },
+        onError: (err) => {
+          console.error('Create room tx failed:', err)
+          setCreateError('Transaction failed. Please try again.')
+        },
+      },
+    )
+  }
 
   return (
     <div style={{ paddingTop: 52 }}>
+      <ConnectModal open={connectOpen} onOpenChange={setConnectOpen} trigger={<span />} />
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '48px 24px 80px' }}>
         <motion.div
           initial={{ opacity: 0, y: 12 }}
@@ -270,30 +351,65 @@ export default function ChatRooms() {
                   fontSize: 14, color: 'var(--black)', outline: 'none',
                 }}
               />
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <button
-                  onClick={() => setShowCreate(false)}
-                  style={{
-                    padding: '9px 18px', borderRadius: 'var(--radius-pill)',
-                    background: 'transparent', color: 'var(--text-secondary)',
-                    fontSize: 13, fontWeight: 500,
-                  }}>Cancel</button>
-                <button
-                  disabled={!newRoom.name}
-                  style={{
-                    padding: '9px 18px', borderRadius: 'var(--radius-pill)',
-                    background: newRoom.name ? 'var(--black)' : 'var(--mid-gray)',
-                    color: 'white',
-                    fontSize: 13, fontWeight: 500,
-                    transition: 'all var(--transition-fast)',
-                  }}>Create Room</button>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexDirection: 'column', alignItems: 'flex-end' }}>
+                {createError && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--danger)' }}>
+                    <AlertCircle size={12} />
+                    {createError}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => { setShowCreate(false); setCreateError(null) }}
+                    style={{
+                      padding: '9px 18px', borderRadius: 'var(--radius-pill)',
+                      background: 'transparent', color: 'var(--text-secondary)',
+                      fontSize: 13, fontWeight: 500,
+                    }}>Cancel</button>
+                  <button
+                    onClick={handleCreateRoom}
+                    disabled={!newRoom.name || isCreating}
+                    style={{
+                      padding: '9px 18px', borderRadius: 'var(--radius-pill)',
+                      background: newRoom.name && !isCreating ? 'var(--black)' : 'var(--mid-gray)',
+                      color: 'white',
+                      fontSize: 13, fontWeight: 500,
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      transition: 'all var(--transition-fast)',
+                      cursor: !newRoom.name || isCreating ? 'not-allowed' : 'pointer',
+                    }}>
+                    {isCreating ? <><Loader size={13} /> Creating...</> : account ? 'Create Room' : 'Connect & Create'}
+                  </button>
+                </div>
               </div>
             </div>
           </motion.div>
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {ROOMS.map(room => <RoomCard key={room.id} room={room} />)}
+          {loadingRooms && rooms.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)' }}>
+              <Loader size={20} style={{ marginBottom: 8, opacity: 0.4, animation: 'spin 1s linear infinite' }} />
+              <p style={{ fontSize: 13 }}>Loading rooms...</p>
+            </div>
+          )}
+          {!loadingRooms && rooms.length === 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.1 }}
+              style={{
+                textAlign: 'center', padding: '64px 24px',
+                borderRadius: 'var(--radius-xl)',
+                border: '1px dashed var(--light-gray)',
+                color: 'var(--text-tertiary)',
+              }}>
+              <MessageCircle size={32} style={{ marginBottom: 12, opacity: 0.4 }} />
+              <p style={{ fontSize: 15, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6 }}>No rooms yet</p>
+              <p style={{ fontSize: 13 }}>Create your first room to start collaborating with AI.</p>
+            </motion.div>
+          )}
+          {rooms.map(room => <RoomCard key={room.id} room={room} />)}
         </div>
 
         <motion.div

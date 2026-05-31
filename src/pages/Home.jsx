@@ -343,7 +343,7 @@ export default function Home() {
             fontSize: 16, color: 'rgba(255,255,255,0.5)',
             fontWeight: 300, marginBottom: 36, lineHeight: 1.6,
           }}>
-            Join thousands of teams using Synapse to ship AI-powered products faster.
+            Join thousands of teams using Coral to ship AI-powered products faster.
           </p>
           <Link to="/marketplace" style={{
             display: 'inline-flex', alignItems: 'center', gap: 8,

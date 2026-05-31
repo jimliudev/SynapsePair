@@ -1,5 +1,5 @@
 {
-  "name": "synapse",
+  "name": "coral",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,11 +10,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mysten/dapp-kit": "^0.14.34",
+    "@mysten/sui": "^2.16.2",
+    "@tanstack/react-query": "^5.29.2",
     "framer-motion": "^12.40.0",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-router-dom": "^7.16.0"
+    "react-router-dom": "^7.16.0",
+    "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -1,53 +1,64 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Search, Star, Zap, Check, ChevronDown } from 'lucide-react'
+import { Search, Star, Check, Loader, AlertCircle, Plus, Upload, X } from 'lucide-react'
+import { useCurrentAccount, useSignAndExecuteTransaction, ConnectModal, useSuiClient } from '@mysten/dapp-kit'
+import { buildSubscribeTxV2, buildPublishSkillTx } from '../lib/sui'
+import { storeBlob, getBlobUrl } from '../lib/walrus'
+import { PACKAGE_ID, MODULE_NAME } from '../config'
 
 const CATEGORIES = ['All', 'Coding', 'Writing', 'Analysis', 'Design', 'Research', 'Marketing']
 
-const SKILLS = [
-  {
-    id: 1, name: 'Code Reviewer Pro', category: 'Coding',
-    author: 'devtools.ai', rating: 4.9, reviews: 1204,
-    price: 9, desc: 'Deep code review with security analysis, best practices, and refactoring suggestions for any language.',
-    tags: ['TypeScript', 'Python', 'Rust'], featured: true, badge: 'Popular',
-  },
-  {
-    id: 2, name: 'Technical Writer', category: 'Writing',
-    author: 'docscraft', rating: 4.8, reviews: 876,
-    price: 7, desc: 'Transform complex technical concepts into clear, engaging documentation that developers love.',
-    tags: ['API Docs', 'Guides', 'READMEs'], featured: false, badge: null,
-  },
-  {
-    id: 3, name: 'Data Analyst', category: 'Analysis',
-    author: 'insight.ai', rating: 4.7, reviews: 643,
-    price: 12, desc: 'Analyze datasets, generate insights, write SQL queries, and create visualization specifications.',
-    tags: ['SQL', 'Python', 'Charts'], featured: true, badge: 'New',
-  },
-  {
-    id: 4, name: 'UI Critic', category: 'Design',
-    author: 'ux.studio', rating: 4.9, reviews: 512,
-    price: 10, desc: 'Expert UI/UX feedback on your designs with actionable improvements and accessibility checks.',
-    tags: ['Figma', 'Web', 'Mobile'], featured: false, badge: null,
-  },
-  {
-    id: 5, name: 'Market Researcher', category: 'Research',
-    author: 'alpha.signal', rating: 4.6, reviews: 389,
-    price: 14, desc: 'Comprehensive market analysis, competitor research, and trend identification for your industry.',
-    tags: ['TAM/SAM', 'Trends', 'Reports'], featured: false, badge: null,
-  },
-  {
-    id: 6, name: 'Growth Copywriter', category: 'Marketing',
-    author: 'convert.ai', rating: 4.8, reviews: 721,
-    price: 8, desc: 'High-converting copy for landing pages, emails, and ads powered by proven growth frameworks.',
-    tags: ['Landing Pages', 'Email', 'Ads'], featured: true, badge: 'Top Rated',
-  },
-]
-
-function SkillCard({ skill, subscribed, onSubscribe }) {
+function SkillCard({ skill, subscribed, onSubscribeSuccess, onUnsubscribe }) {
   const [hovered, setHovered] = useState(false)
+  const [connectOpen, setConnectOpen] = useState(false)
+  const [txError, setTxError] = useState(null)
+  const account = useCurrentAccount()
+  const { mutate: signAndExecute, isPending } = useSignAndExecuteTransaction()
+
+  const handleSubscribe = () => {
+    setTxError(null)
+
+    // Not connected — prompt wallet connect
+    if (!account) {
+      setConnectOpen(true)
+      return
+    }
+
+    // Contract not deployed yet — fall back to local state
+    if (!PACKAGE_ID) {
+      onSubscribeSuccess(skill.id, null)
+      return
+    }
+
+    // price * 1_000_000 MIST per dollar (symbolic on testnet, e.g. $9 → 0.009 SUI)
+    const priceInMist = skill.price * 1_000_000
+
+    const tx = buildSubscribeTxV2(skill.id, skill.name, priceInMist)
+    signAndExecute(
+      { transaction: tx },
+      {
+        onSuccess: (result) => {
+          onSubscribeSuccess(skill.id, result.digest)
+        },
+        onError: (err) => {
+          console.error('Subscribe tx failed:', err)
+          setTxError('Transaction failed. Check your wallet and try again.')
+        },
+      },
+    )
+  }
+
+  const buttonLabel = () => {
+    if (subscribed) return <><Check size={13} /> Subscribed</>
+    if (isPending) return <><Loader size={13} className="spin" /> Confirm in wallet</>
+    if (!account) return 'Connect & Subscribe'
+    return 'Subscribe'
+  }
 
   return (
-    <motion.div
+    <>
+      <ConnectModal open={connectOpen} onOpenChange={setConnectOpen} trigger={<span />} />
+      <motion.div
       initial={{ opacity: 0, y: 20 }}
       whileInView={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
@@ -124,22 +135,35 @@ function SkillCard({ skill, subscribed, onSubscribe }) {
             ${skill.price}<span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)' }}>/mo</span>
           </span>
           <button
-            onClick={() => onSubscribe(skill.id)}
+            onClick={subscribed ? () => onUnsubscribe(skill.id) : handleSubscribe}
+            disabled={isPending}
             style={{
               padding: '8px 16px',
               borderRadius: 'var(--radius-pill)',
-              background: subscribed ? 'var(--off-white)' : 'var(--black)',
-              color: subscribed ? 'var(--text-secondary)' : 'white',
+              background: subscribed ? 'var(--off-white)' : isPending ? 'var(--mid-gray)' : 'var(--black)',
+              color: subscribed ? 'var(--text-secondary)' : isPending ? 'var(--text-secondary)' : 'white',
               fontSize: 13, fontWeight: 500,
               display: 'flex', alignItems: 'center', gap: 6,
               transition: 'all var(--transition-fast)',
               border: subscribed ? '1px solid var(--light-gray)' : 'none',
+              cursor: isPending ? 'not-allowed' : 'pointer',
             }}>
-            {subscribed ? <><Check size={13} /> Subscribed</> : 'Subscribe'}
+            {buttonLabel()}
           </button>
         </div>
       </div>
+      {txError && (
+        <div style={{
+          marginTop: 10,
+          display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 12, color: 'var(--danger)',
+        }}>
+          <AlertCircle size={12} />
+          {txError}
+        </div>
+      )}
     </motion.div>
+    </>
   )
 }
 
@@ -147,9 +171,106 @@ export default function Marketplace() {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All')
   const [subscribed, setSubscribed] = useState(new Set())
-  const [sort, setSort] = useState('Popular')
+  const [skills, setSkills] = useState([])
+  const [loadingSkills, setLoadingSkills] = useState(false)
+  const [showAdminPanel, setShowAdminPanel] = useState(false)
+  const [adminForm, setAdminForm] = useState({ name: '', description: '', category: 'Coding', price: '', systemPrompt: '', tags: '', author: '', badge: '' })
+  const [isPublishing, setIsPublishing] = useState(false)
+  const [publishError, setPublishError] = useState('')
+  const [connectOpen, setConnectOpen] = useState(false)
+  const account = useCurrentAccount()
+  const client = useSuiClient()
+  const { mutate: signAndExecute } = useSignAndExecuteTransaction()
 
-  const filtered = SKILLS.filter(s => {
+  // Fetch SkillPublished events from chain, then load each Walrus blob for metadata
+  useEffect(() => {
+    if (!PACKAGE_ID) return
+    setLoadingSkills(true)
+    client
+      .queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::${MODULE_NAME}::SkillPublished` },
+        limit: 50,
+        order: 'descending',
+      })
+      .then(async ({ data }) => {
+        const loaded = await Promise.all(
+          data.map(async (e) => {
+            const f = e.parsedJson
+            const blobId = typeof f.blob_id === 'string' ? f.blob_id : ''
+            if (!blobId) return null
+            try {
+              const res = await fetch(getBlobUrl(blobId))
+              const meta = await res.json()
+              return {
+                id: Number(f.skill_id),
+                price: Number(f.price) / 1_000_000,
+                blobId,
+                rating: 0, reviews: 0,
+                ...meta,
+              }
+            } catch { return null }
+          })
+        )
+        setSkills(prev => {
+          const ids = new Set(prev.map(s => s.id))
+          return [...prev, ...loaded.filter(s => s && !ids.has(s.id))]
+        })
+      })
+      .catch(err => console.error('Failed to fetch skills:', err))
+      .finally(() => setLoadingSkills(false))
+  }, [PACKAGE_ID])
+
+  const publishSkill = async () => {
+    if (!adminForm.name || !adminForm.price) { setPublishError('Name and price are required'); return }
+    if (!account) { setConnectOpen(true); return }
+    setIsPublishing(true)
+    setPublishError('')
+    try {
+      const skillId = Date.now() % 2147483647
+      const priceInMist = Math.round(parseFloat(adminForm.price) * 1_000_000)
+      const meta = {
+        name: adminForm.name.trim(),
+        description: adminForm.description.trim(),
+        category: adminForm.category,
+        systemPrompt: adminForm.systemPrompt.trim(),
+        tags: adminForm.tags.split(',').map(t => t.trim()).filter(Boolean),
+        author: adminForm.author.trim() || `${account.address.slice(0, 6)}...${account.address.slice(-4)}`,
+        badge: adminForm.badge.trim() || null,
+        rating: 0, reviews: 0,
+      }
+      const blobId = await storeBlob(meta)
+      if (!PACKAGE_ID) {
+        // No contract — save locally only
+        setSkills(prev => [{ id: skillId, price: parseFloat(adminForm.price), blobId, ...meta }, ...prev])
+        setShowAdminPanel(false)
+        setAdminForm({ name: '', description: '', category: 'Coding', price: '', systemPrompt: '', tags: '', author: '', badge: '' })
+        return
+      }
+      const tx = buildPublishSkillTx(skillId, priceInMist, blobId)
+      signAndExecute(
+        { transaction: tx },
+        {
+          onSuccess: (result) => {
+            console.info(`Skill published: https://suiexplorer.com/txblock/${result.digest}?network=testnet`)
+            setSkills(prev => [{ id: skillId, price: parseFloat(adminForm.price), blobId, ...meta }, ...prev])
+            setShowAdminPanel(false)
+            setAdminForm({ name: '', description: '', category: 'Coding', price: '', systemPrompt: '', tags: '', author: '', badge: '' })
+          },
+          onError: (err) => {
+            console.error('Publish skill failed:', err)
+            setPublishError('Transaction failed. Check your wallet and try again.')
+          },
+        }
+      )
+    } catch (err) {
+      console.error('Publish skill error:', err)
+      setPublishError(err.message)
+    } finally {
+      setIsPublishing(false)
+    }
+  }
+
+  const filtered = skills.filter(s => {
     const matchCat = category === 'All' || s.category === category
     const matchSearch = !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.desc.toLowerCase().includes(search.toLowerCase())
     return matchCat && matchSearch
@@ -164,8 +285,35 @@ export default function Marketplace() {
     })
   }
 
+  const handleSubscribeSuccess = (id, digest) => {
+    setSubscribed(prev => new Set([...prev, id]))
+    if (digest) console.info(`Subscription tx: https://suiexplorer.com/txblock/${digest}?network=testnet`)
+  }
+
+  const adminField = (label, key, placeholder, opts = {}) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</label>
+      {opts.textarea
+        ? <textarea
+            rows={3}
+            placeholder={placeholder}
+            value={adminForm[key]}
+            onChange={e => setAdminForm(p => ({ ...p, [key]: e.target.value }))}
+            style={{ padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--light-gray)', fontSize: 13, color: 'var(--black)', resize: 'vertical', outline: 'none' }}
+          />
+        : <input
+            placeholder={placeholder}
+            value={adminForm[key]}
+            onChange={e => setAdminForm(p => ({ ...p, [key]: e.target.value }))}
+            style={{ padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--light-gray)', fontSize: 13, color: 'var(--black)', outline: 'none' }}
+          />
+      }
+    </div>
+  )
+
   return (
     <div style={{ paddingTop: 52 }}>
+      <ConnectModal open={connectOpen} onOpenChange={setConnectOpen} trigger={<span />} />
       {/* Header */}
       <div style={{
         borderBottom: '1px solid var(--light-gray)',
@@ -188,7 +336,23 @@ export default function Marketplace() {
                 display: 'inline-flex', alignItems: 'center', gap: 4,
                 color: 'var(--accent)', fontWeight: 500, marginRight: 6,
               }}><Check size={13} /> {subscribed.size} subscribed ·</span>}
-              {SKILLS.length} skills available
+              {filtered.length} skills available
+              {account && (
+                <button
+                  onClick={() => setShowAdminPanel(v => !v)}
+                  style={{
+                    marginLeft: 16,
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    padding: '4px 12px',
+                    borderRadius: 'var(--radius-pill)',
+                    background: showAdminPanel ? 'var(--black)' : 'var(--off-white)',
+                    color: showAdminPanel ? 'white' : 'var(--text-secondary)',
+                    border: '1px solid var(--light-gray)',
+                    fontSize: 12, fontWeight: 500,
+                  }}>
+                  <Plus size={12} /> Publish Skill
+                </button>
+              )}
             </p>
           </motion.div>
 
@@ -259,6 +423,67 @@ export default function Marketplace() {
 
       {/* Grid */}
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '32px 24px 80px' }}>
+
+        {/* Admin: Publish Skill panel */}
+        {showAdminPanel && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.25 }}
+            style={{
+              background: 'var(--off-white)',
+              border: '1px solid var(--light-gray)',
+              borderRadius: 'var(--radius-xl)',
+              padding: 24, marginBottom: 24, overflow: 'hidden',
+            }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, color: 'var(--black)' }}>Publish New Skill</h3>
+              <button onClick={() => setShowAdminPanel(false)} style={{ background: 'none', color: 'var(--text-tertiary)' }}><X size={16} /></button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {adminField('Name *', 'name', 'e.g. Code Reviewer Pro')}
+              {adminField('Price (SUI/mo) *', 'price', 'e.g. 9')}
+              {adminField('Author', 'author', 'Your name or handle')}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Category</label>
+                <select
+                  value={adminForm.category}
+                  onChange={e => setAdminForm(p => ({ ...p, category: e.target.value }))}
+                  style={{ padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--light-gray)', fontSize: 13, color: 'var(--black)', background: 'var(--white)', outline: 'none' }}>
+                  {CATEGORIES.filter(c => c !== 'All').map(c => <option key={c}>{c}</option>)}
+                </select>
+              </div>
+              {adminField('Badge', 'badge', 'New / Popular / Featured (optional)')}
+              {adminField('Tags', 'tags', 'comma-separated, e.g. code,review,typescript')}
+            </div>
+            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {adminField('Description', 'description', 'Short description shown in the card', { textarea: true })}
+              {adminField('System Prompt', 'systemPrompt', 'Instructions the AI will follow when this skill is active', { textarea: true })}
+            </div>
+            {publishError && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--danger)', marginTop: 10 }}>
+                <AlertCircle size={12} /> {publishError}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button onClick={() => setShowAdminPanel(false)} style={{ padding: '8px 16px', borderRadius: 'var(--radius-pill)', background: 'transparent', color: 'var(--text-secondary)', fontSize: 13 }}>Cancel</button>
+              <button
+                onClick={publishSkill}
+                disabled={isPublishing}
+                style={{
+                  padding: '8px 20px', borderRadius: 'var(--radius-pill)',
+                  background: isPublishing ? 'var(--mid-gray)' : 'var(--black)',
+                  color: 'white', fontSize: 13, fontWeight: 500,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}>
+                {isPublishing
+                  ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Publishing...</>
+                  : <><Upload size={13} /> Upload to Walrus &amp; Publish</>}
+              </button>
+            </div>
+          </motion.div>
+        )}
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
@@ -269,14 +494,23 @@ export default function Marketplace() {
               key={skill.id}
               skill={skill}
               subscribed={subscribed.has(skill.id)}
-              onSubscribe={toggleSubscribe}
+              onSubscribeSuccess={handleSubscribeSuccess}
+              onUnsubscribe={toggleSubscribe}
             />
           ))}
         </div>
         {filtered.length === 0 && (
           <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--text-tertiary)' }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>🔍</div>
-            <p style={{ fontSize: 15 }}>No skills found for "{search}"</p>
+            {loadingSkills
+              ? <><Loader size={24} style={{ marginBottom: 12, opacity: 0.4, animation: 'spin 1s linear infinite' }} /><p style={{ fontSize: 14 }}>Loading skills from chain...</p></>
+              : search
+                ? <p style={{ fontSize: 15 }}>No skills found for &ldquo;{search}&rdquo;</p>
+                : <>
+                    <div style={{ fontSize: 40, marginBottom: 12 }}>🛒</div>
+                    <p style={{ fontSize: 15, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6 }}>No skills published yet</p>
+                    <p style={{ fontSize: 13 }}>{account ? 'Click "Publish Skill" above to add the first one.' : 'Connect wallet and publish the first skill.'}</p>
+                  </>
+            }
           </div>
         )}
       </div>
